@@ -5,6 +5,7 @@ verify_ssl = true
 
 [dev-packages]
 pylint = "*"
+black = "==19.10b0"
 
 [packages]
 redis = "*"
