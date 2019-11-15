@@ -64,14 +64,17 @@ class UserCache(object):
         :rtype: datetime.datetime
 
         :Example:
-        UserCache.floor_dt(
+
+        >>> UserCache.floor_dt(
           datetime.datetime(2019,2,1,12,1,2),
           datetime.timedelta(days=1)
-        ) -> datetime.datetime(2019,2,1)
-        UserCache.floor_dt(
+        ) 
+        datetime.datetime(2019,2,1)
+        >>> UserCache.floor_dt(
           datetime.datetime(2019,2,1,12,1,2),
           datetime.timedelta(days=0.5)
-        ) -> datetime.datetime(2019,2,1,12)
+        ) 
+        datetime.datetime(2019,2,1,12)
         """
         # how many secs have passed
         nsecs = dt.hour * 3600 + dt.minute * 60 + dt.second + dt.microsecond * 1e-6

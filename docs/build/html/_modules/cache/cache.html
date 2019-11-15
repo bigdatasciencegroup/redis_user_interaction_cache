@@ -1,0 +1,306 @@
+
+<!DOCTYPE html>
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta charset="utf-8" />
+    <title>cache.cache &#8212; Redis DS cache 0.0.1 documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for cache.cache</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">redis</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">datetime</span>
+<span class="kn">import</span> <span class="nn">asyncio</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="k">import</span> <span class="n">Set</span><span class="p">,</span> <span class="n">List</span>
+
+
+<span class="n">LOGGER</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)</span>
+<span class="n">REDIS_HOST</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;REDIS_HOST&quot;</span><span class="p">]</span>
+<span class="n">REDIS_PORT</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;REDIS_PORT&quot;</span><span class="p">]</span>
+<span class="n">REDIS_DB</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;REDIS_DB&quot;</span><span class="p">]</span>
+<span class="n">REDIS_TTL</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;REDIS_TTL&quot;</span><span class="p">,</span> <span class="s2">&quot;7&quot;</span><span class="p">)))</span>
+<span class="n">REDIS_TIME_RESOLUTION</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span>
+    <span class="n">days</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;REDIS_RESOLUTION&quot;</span><span class="p">,</span> <span class="s2">&quot;1&quot;</span><span class="p">))</span>
+<span class="p">)</span>
+
+
+<div class="viewcode-block" id="UserCache"><a class="viewcode-back" href="../../index.html#cache.cache.UserCache">[docs]</a><span class="k">class</span> <span class="nc">UserCache</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+<div class="viewcode-block" id="UserCache.__init__"><a class="viewcode-back" href="../../index.html#cache.cache.UserCache.__init__">[docs]</a>    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">max_retry</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">10</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">max_retry</span> <span class="o">=</span> <span class="n">max_retry</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_redis</span> <span class="o">=</span> <span class="kc">None</span></div>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">redis</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">redis</span><span class="o">.</span><span class="n">Redis</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;The Redis Python client connection object</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_redis</span> <span class="ow">or</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_redis</span><span class="o">.</span><span class="n">ping</span><span class="p">():</span>
+            <span class="n">needs_client</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="n">retry</span> <span class="o">=</span> <span class="mi">1</span>
+            <span class="k">while</span> <span class="n">needs_client</span> <span class="ow">and</span> <span class="n">retry</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_retry</span><span class="p">:</span>
+                <span class="n">retry</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_redis</span> <span class="o">=</span> <span class="n">redis</span><span class="o">.</span><span class="n">Redis</span><span class="p">(</span>
+                    <span class="n">host</span><span class="o">=</span><span class="n">REDIS_HOST</span><span class="p">,</span>
+                    <span class="n">port</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">REDIS_PORT</span><span class="p">),</span>
+                    <span class="n">db</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">REDIS_DB</span><span class="p">),</span>
+                    <span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">,</span>
+                    <span class="n">decode_responses</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_redis</span><span class="o">.</span><span class="n">ping</span><span class="p">():</span>
+                        <span class="n">needs_client</span> <span class="o">=</span> <span class="kc">False</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+                <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                    <span class="n">LOGGER</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Cache connection failed with </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="p">))</span>
+                    <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">needs_client</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s2">&quot;Could not establish connection to cache&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_redis</span>
+
+<div class="viewcode-block" id="UserCache.floor_dt"><a class="viewcode-back" href="../../index.html#cache.cache.UserCache.floor_dt">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">floor_dt</span><span class="p">(</span><span class="n">dt</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="p">,</span> <span class="n">res</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">timedelta</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;Floor the provided datetime object to the closest interval</span>
+<span class="sd">        as provided by the res timedelta object</span>
+<span class="sd">        </span>
+<span class="sd">        :param dt: the datetime to floor</span>
+<span class="sd">        :type dt: datetime.datetime</span>
+<span class="sd">        :param res: the timedelta defining the resolution for time flooring</span>
+<span class="sd">        :type res: datetime.timedelta</span>
+<span class="sd">        </span>
+<span class="sd">        :returns: Datetime floored to closest resolution</span>
+<span class="sd">        :rtype: datetime.datetime</span>
+
+<span class="sd">        :Example:</span>
+
+<span class="sd">        &gt;&gt;&gt; UserCache.floor_dt(</span>
+<span class="sd">          datetime.datetime(2019,2,1,12,1,2),</span>
+<span class="sd">          datetime.timedelta(days=1)</span>
+<span class="sd">        ) </span>
+<span class="sd">        datetime.datetime(2019,2,1)</span>
+<span class="sd">        &gt;&gt;&gt; UserCache.floor_dt(</span>
+<span class="sd">          datetime.datetime(2019,2,1,12,1,2),</span>
+<span class="sd">          datetime.timedelta(days=0.5)</span>
+<span class="sd">        ) </span>
+<span class="sd">        datetime.datetime(2019,2,1,12)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># how many secs have passed</span>
+        <span class="n">nsecs</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">hour</span> <span class="o">*</span> <span class="mi">3600</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">minute</span> <span class="o">*</span> <span class="mi">60</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">second</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">microsecond</span> <span class="o">*</span> <span class="mf">1e-6</span>
+        <span class="n">delta</span> <span class="o">=</span> <span class="n">nsecs</span> <span class="o">%</span> <span class="n">res</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">dt</span> <span class="o">-</span> <span class="n">datetime</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="n">delta</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="UserCache.unix_time"><a class="viewcode-back" href="../../index.html#cache.cache.UserCache.unix_time">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">unix_time</span><span class="p">(</span><span class="n">dt</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;get seconds since epoch for datetime</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">epoch</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">utcfromtimestamp</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">int</span><span class="p">((</span><span class="n">dt</span> <span class="o">-</span> <span class="n">epoch</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">())</span></div>
+
+<div class="viewcode-block" id="UserCache.query_cache"><a class="viewcode-back" href="../../index.html#cache.cache.UserCache.query_cache">[docs]</a>    <span class="k">async</span> <span class="k">def</span> <span class="nf">query_cache</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">userId</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Set</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+        <span class="sd">&quot;&quot;&quot;Query all valid time buckets for a given userId for cached interactions.</span>
+<span class="sd">        </span>
+<span class="sd">        :param userId: the userId</span>
+<span class="sd">        :type userId: str</span>
+<span class="sd">        </span>
+<span class="sd">        :returns: Set of cached interactions</span>
+<span class="sd">        :rtype: Set[str]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">now</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">utcnow</span><span class="p">()</span>
+        <span class="n">result_set</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+
+        <span class="k">for</span> <span class="n">delta</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">((</span><span class="n">REDIS_TTL</span><span class="o">.</span><span class="n">days</span> <span class="o">//</span> <span class="n">REDIS_TIME_RESOLUTION</span><span class="o">.</span><span class="n">days</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="n">bucket</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">unix_time</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">floor_dt</span><span class="p">(</span>
+                    <span class="n">now</span> <span class="o">-</span> <span class="n">datetime</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="n">delta</span><span class="p">),</span> <span class="n">REDIS_TIME_RESOLUTION</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+            <span class="n">key</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">userId</span><span class="p">,</span> <span class="n">bucket</span><span class="p">)</span>
+            <span class="n">s</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">redis</span><span class="o">.</span><span class="n">smembers</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">s</span><span class="p">:</span>
+                <span class="n">result_set</span> <span class="o">=</span> <span class="n">result_set</span><span class="o">.</span><span class="n">union</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">result_set</span></div>
+
+<div class="viewcode-block" id="UserCache.add_to_cache"><a class="viewcode-back" href="../../index.html#cache.cache.UserCache.add_to_cache">[docs]</a>    <span class="k">async</span> <span class="k">def</span> <span class="nf">add_to_cache</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">userId</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">interactionId</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;Cache interaction of a user.</span>
+<span class="sd">        </span>
+<span class="sd">        :param userId: the corresponding user Id of an interaction</span>
+<span class="sd">        :type userId: str</span>
+<span class="sd">        :param interactionId: the interaction ID to cache</span>
+<span class="sd">        :type interactionId: str</span>
+<span class="sd">        </span>
+<span class="sd">        :returns: True</span>
+<span class="sd">        :rtype: bool</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">bucket</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">unix_time</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">floor_dt</span><span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">utcnow</span><span class="p">(),</span> <span class="n">REDIS_TIME_RESOLUTION</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">key</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">userId</span><span class="p">,</span> <span class="n">bucket</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">interactionId</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">list</span><span class="p">:</span>
+            <span class="n">interactionId</span> <span class="o">=</span> <span class="p">[</span><span class="n">interactionId</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">interactionId</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">redis</span><span class="o">.</span><span class="n">sadd</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="n">LOGGER</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                    <span class="s2">&quot;Failed to cache iteraction! </span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2"> with error </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">key</span><span class="p">,</span> <span class="n">interactionId</span><span class="p">,</span> <span class="n">e</span>
+                    <span class="p">)</span>
+                <span class="p">)</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">redis</span><span class="o">.</span><span class="n">expire</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">REDIS_TTL</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="n">LOGGER</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Failed to extend TTL of key: </span><span class="si">{}</span><span class="s2"> with error </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">e</span><span class="p">))</span>
+
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="UserCache.user_cache"><a class="viewcode-back" href="../../index.html#cache.cache.UserCache.user_cache">[docs]</a>    <span class="k">async</span> <span class="k">def</span> <span class="nf">user_cache</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">userId</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">interactionId</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">add_to_cache</span><span class="p">:</span> <span class="nb">bool</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Set</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+        <span class="sd">&quot;&quot;&quot;Async interaction with the user cache.</span>
+<span class="sd">        </span>
+<span class="sd">        :param userId: the corresponding user Id of an interaction</span>
+<span class="sd">        :type userId: str</span>
+<span class="sd">        :param interactionId: the interaction ID to cache</span>
+<span class="sd">        :type interactionId: str</span>
+<span class="sd">        :param add_to_cache: Whether to cache interaction</span>
+<span class="sd">        :type add_to_cache: bool</span>
+<span class="sd">        </span>
+<span class="sd">        :returns: Result set of cached interactions</span>
+<span class="sd">        :rtype: Set[str]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">interactionId</span> <span class="ow">and</span> <span class="n">add_to_cache</span><span class="p">:</span>
+            <span class="n">add_to_cache_future</span> <span class="o">=</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">ensure_future</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">add_to_cache</span><span class="p">(</span><span class="n">userId</span><span class="p">,</span> <span class="n">interactionId</span><span class="p">)</span>
+            <span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">cache_response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">wait_for</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">query_cache</span><span class="p">(</span><span class="n">userId</span><span class="p">),</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">0.1</span>
+            <span class="p">)</span>
+        <span class="k">except</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">TimeoutError</span><span class="p">:</span>
+            <span class="n">cache_response</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">interactionId</span> <span class="ow">and</span> <span class="n">add_to_cache</span><span class="p">:</span>
+                <span class="n">_</span> <span class="o">=</span> <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">wait_for</span><span class="p">(</span><span class="n">add_to_cache_future</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">TimeoutError</span><span class="p">:</span>
+            <span class="n">LOGGER</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                <span class="s2">&quot;Failed to cache iteraction! </span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">userId</span><span class="p">,</span> <span class="n">interactionId</span><span class="p">)</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">cache_response</span></div>
+
+    <span class="k">def</span> <span class="nf">__call__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">userId</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">interactionId</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">add_to_cache</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+        <span class="sd">&quot;&quot;&quot;Blocking call to the async user interaction cache.</span>
+<span class="sd">        </span>
+<span class="sd">        :param userId: the corresponding user Id of an interaction</span>
+<span class="sd">        :type userId: str</span>
+<span class="sd">        :param interactionId: the interaction ID to cache</span>
+<span class="sd">        :type interactionId: str</span>
+<span class="sd">        :param add_to_cache: Whether to cache interaction</span>
+<span class="sd">        :type add_to_cache: bool</span>
+<span class="sd">        </span>
+<span class="sd">        :returns: List of cached user interactions</span>
+<span class="sd">        :rtype: List[str]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">loop</span> <span class="o">=</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">new_event_loop</span><span class="p">()</span>
+        <span class="n">asyncio</span><span class="o">.</span><span class="n">set_event_loop</span><span class="p">(</span><span class="n">loop</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">interactionId</span> <span class="ow">and</span> <span class="nb">type</span><span class="p">(</span><span class="n">interactionId</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">list</span><span class="p">:</span>
+            <span class="n">interactionId</span> <span class="o">=</span> <span class="p">[</span><span class="n">interactionId</span><span class="p">]</span>
+        <span class="n">cache_response</span> <span class="o">=</span> <span class="n">loop</span><span class="o">.</span><span class="n">run_until_complete</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">user_cache</span><span class="p">(</span><span class="n">userId</span><span class="p">,</span> <span class="n">interactionId</span><span class="p">,</span> <span class="n">add_to_cache</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">loop</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">interactionId</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">list</span><span class="p">(</span><span class="n">cache_response</span><span class="o">.</span><span class="n">union</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">interactionId</span><span class="p">)))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">list</span><span class="p">(</span><span class="n">cache_response</span><span class="p">)</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">Redis DS cache</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Jan Teichmann.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 2.2.1</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>
