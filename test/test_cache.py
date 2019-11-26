@@ -51,6 +51,8 @@ class TestRedisCache(unittest.TestCase):
             ),
             datetime.datetime(2019, 2, 1, 12),
         )
+        # The flooring function is limited to resolutions of max 1 day
+        # When a bigger time delta is provided the behavior is bucketing by day
         self.assertEqual(
             self.c.floor_dt(
                 datetime.datetime(2019, 2, 1, 12, 1, 2), datetime.timedelta(days=100)
